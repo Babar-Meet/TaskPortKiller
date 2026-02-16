@@ -59,6 +59,33 @@ TaskPortKiller offers comprehensive port and process management capabilities wit
 
 ### For General Users (No Coding Required)
 
+
+#### Using build_exe.bat (Recommended)
+
+The easiest way to build the executable is using the `build_exe.bat` script, which automates the entire process:
+
+1. **Run the Build Script**
+   - Double-click `build_exe.bat` from File Explorer
+   - Or run it from Command Prompt:
+     ```bash
+     build_exe.bat
+     ```
+
+2. **What to Expect During Build**
+   The script will guide you through the process:
+   - Display a welcome message and wait for your confirmation
+   - Check if Python is properly installed
+   - Create a temporary virtual environment (`build_env`)
+   - Install required dependencies and PyInstaller
+   - Clean previous build artifacts
+   - Build the executable with PyInstaller
+   - Clean up temporary files
+   - Show success message with the executable location
+
+3. **Result**
+   A standalone executable `TaskPortKiller.exe` will be created in the `dist` folder. This file can be run on any Windows computer without Python.
+
+
 If you're not a developer and just want to use the application:
 
 1. **Download the Application**
@@ -105,16 +132,117 @@ python main.py
 ```
 
 #### Step 4: Build Executable (Optional)
-To create a standalone executable file:
-1. Install PyInstaller:
+
+For users who want to create a standalone executable that can run on any Windows computer without Python installed, follow these detailed instructions:
+
+### Building the Executable
+
+#### Prerequisites
+Before you begin, ensure your system meets these requirements:
+
+1. **Python Installation**
+   - Python 3.6 or higher (Python 3.7+ recommended)
+   - Must be added to system PATH (check "Add Python to PATH" during installation)
+
+2. **System Requirements**
+   - Windows 10 or Windows 11 (32-bit or 64-bit)
+   - At least 500MB free disk space for temporary build files
+   - Administrator privileges (for some operations)
+
+#### Manual Build Instructions (Alternative)
+
+If you prefer to build manually:
+
+1. **Install PyInstaller**
    ```bash
    pip install pyinstaller
    ```
-2. Run the build script:
+
+2. **Clean Previous Builds (Optional but Recommended)**
    ```bash
-   build_exe.bat
+   if exist build rmdir /s /q build
+   if exist dist rmdir /s /q dist
+   if exist TaskPortKiller.spec del TaskPortKiller.spec
    ```
-3. The executable will be created in the `dist` folder
+
+3. **Build the Executable**
+   - For windowed application (no console):
+     ```bash
+     pyinstaller --onefile --windowed --name=TaskPortKiller --distpath=dist main.py
+     ```
+
+   - If you have an icon file (icon.ico):
+     ```bash
+     pyinstaller --onefile --windowed --icon=icon.ico --name=TaskPortKiller --distpath=dist main.py
+     ```
+
+   - For console output (debugging):
+     ```bash
+     pyinstaller --onefile --name=TaskPortKiller --distpath=dist main.py
+     ```
+
+4. **Locate the Executable**
+   The `TaskPortKiller.exe` file will be in the `dist` folder.
+
+#### Build Process Details
+
+The build script (`build_exe.bat`) performs these key steps:
+
+1. **Environment Setup**: Creates a temporary virtual environment to isolate the build process
+2. **Dependency Installation**: Installs required packages and PyInstaller
+3. **Cleanup**: Removes previous build artifacts
+4. **Compilation**: Packages your Python script and dependencies into a single executable
+5. **Cleanup**: Removes temporary files
+
+#### Troubleshooting Common Build Issues
+
+**1. "Python is not installed!" Error**
+- Install Python from [python.org](https://www.python.org/)
+- Ensure you check "Add Python to PATH" during installation
+- Restart your terminal or computer
+
+**2. "pyinstaller is not recognized" Error**
+- Try reinstalling PyInstaller:
+  ```bash
+  pip install --upgrade pyinstaller
+  ```
+- Check if Python's Scripts directory is in your PATH
+
+**3. Build Fails with "Permission Denied"**
+- Run Command Prompt as Administrator
+- Close any open TaskPortKiller processes
+- Temporarily disable antivirus software that might be interfering
+
+**4. Build Succeeds but EXE Doesn't Run**
+- Check if `main.py` exists in the correct directory
+- Verify Python installation
+- Try running without the `--windowed` option to see console errors
+
+**5. Large Executable Size**
+- The executable includes Python runtime and dependencies, so it's normal (typically ~15-25MB)
+- This is unavoidable for standalone executables
+
+**6. Missing icon.ico**
+- If you don't have an icon file, the build will continue without it
+- The executable will use a default icon
+
+**7. Virtual Environment Issues**
+- Delete the `build_env` folder and try again
+- Manually create and activate a virtual environment
+
+#### Distributing the Executable
+
+1. **Single File**: Just distribute `dist/TaskPortKiller.exe`
+2. **No Dependencies**: Recipients don't need Python installed
+3. **Compatibility**: Works on Windows 10 and Windows 11 (32-bit/64-bit)
+4. **Portability**: Can be run from any location (USB drive, network share, etc.)
+
+#### Verifying the Build
+
+After building, test your executable:
+1. Run `dist/TaskPortKiller.exe`
+2. Verify all features work correctly
+3. Check that the application starts quickly without Python errors
 
 #### Development Tips
 - Run `python test_app.py` to verify functionality

@@ -54,6 +54,7 @@ sdist/
 develop-eggs/
 .installed.cfg
 *.egg
+*.spec
 
 # Executables
 *.exe

@@ -83,5 +83,8 @@ coverage.xml
 *.sqlite
 
 # Project-Specific Directories
+build_env/
 run app for devs/__pycache__/
 run app for devs/*.pyc
+run app for devs/*.pyo
+run app for devs/*.pyd

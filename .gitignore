@@ -1,0 +1,87 @@
+# Python Virtual Environments
+venv/
+env/
+ENV/
+.venv/
+virtualenv/
+*.venv/
+
+# Python Cache
+__pycache__/
+*.py[co]
+*$py.class
+*.pyd
+.Python
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+.env.development
+.env.test
+.env.production
+
+# Temporary Files
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+.tmp/
+.temp/
+
+# IDE and Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# Build Artifacts
+build/
+dist/
+*.egg-info/
+eggs/
+.eggs/
+parts/
+bin/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+*.egg
+
+# Executables
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Log Files
+*.log
+logs/
+*.log.*
+server.log
+
+# Test Coverage
+htmlcov/
+.coverage
+.pytest_cache/
+.tox/
+.coverage*
+coverage.xml
+.pytest_cache/
+
+# Database Files
+*.db
+*.sqlite3
+*.sqlite
+
+# Project-Specific Directories
+run app for devs/__pycache__/
+run app for devs/*.pyc

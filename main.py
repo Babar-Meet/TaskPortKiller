@@ -492,6 +492,21 @@ class QuickKillTab:
         process_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
         process_entry.bind("<KeyRelease>", lambda e: self.update_preview())
         
+        # Force Delete Section
+        delete_frame = ttk.LabelFrame(main_frame, text="Force Delete Folder/File", padding="15")
+        delete_frame.pack(fill=tk.X, expand=False, pady=(0, 20))
+        
+        ttk.Label(delete_frame, text="Path:").pack(side=tk.LEFT, padx=(0, 10))
+        self.delete_path_var = tk.StringVar()
+        delete_entry = ttk.Entry(delete_frame, textvariable=self.delete_path_var, font=("Arial", 10))
+        delete_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        
+        paste_btn = ttk.Button(delete_frame, text="Paste", command=self.paste_path)
+        paste_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.delete_btn = ttk.Button(delete_frame, text="Force Delete", command=self.force_delete, state=tk.DISABLED)
+        self.delete_btn.pack(side=tk.LEFT)
+        
         # Action Buttons
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, expand=False, pady=(0, 20))
@@ -518,6 +533,9 @@ class QuickKillTab:
             command=self.clear_inputs
         )
         self.clear_btn.pack(side=tk.LEFT)
+        
+        # Bind delete path entry to update button state
+        delete_entry.bind("<KeyRelease>", lambda e: self.update_delete_button_state())
         
         # Preview Section
         preview_frame = ttk.LabelFrame(main_frame, text="Preview", padding="15")
@@ -626,10 +644,134 @@ class QuickKillTab:
     
 
 
+    def paste_path(self):
+        """Paste clipboard content into delete path entry."""
+        try:
+            clipboard_content = self.container.clipboard_get()
+            # Strip any leading/trailing whitespace and quotes
+            stripped_content = clipboard_content.strip().strip('"').strip("'")
+            self.delete_path_var.set(stripped_content)
+            self.update_delete_button_state()
+        except Exception as e:
+            print(f"Error pasting from clipboard: {e}")
+            show_error("Error", "Failed to paste from clipboard. Please try manually entering the path.")
+    
+    def update_delete_button_state(self):
+        """Update delete button state based on input validity."""
+        path = self.delete_path_var.get().strip()
+        if path:
+            self.delete_btn.config(state=tk.NORMAL)
+        else:
+            self.delete_btn.config(state=tk.DISABLED)
+    
+    def force_delete(self):
+        """Execute force delete operation in a separate thread."""
+        path = self.delete_path_var.get().strip()
+        if not path:
+            return
+            
+        # Strip quotes if present
+        path = path.strip('"').strip("'")
+        
+        # Validate path
+        if not os.path.exists(path):
+            show_error("Error", f"The path '{path}' does not exist.")
+            return
+            
+        # Confirm deletion
+        confirm = ask_confirmation(
+            "Force Delete Confirmation",
+            f"Are you sure you want to force delete:\n{path}\n\nThis operation cannot be undone!"
+        )
+        if not confirm:
+            return
+            
+        # Disable button during operation
+        self.delete_btn.config(state=tk.DISABLED)
+        self.kill_one_btn.config(state=tk.DISABLED)
+        self.kill_all_btn.config(state=tk.DISABLED)
+        self.clear_btn.config(state=tk.DISABLED)
+        
+        # Execute in thread
+        threading.Thread(target=self.force_delete_thread, args=(path,), daemon=True).start()
+    
+    def force_delete_thread(self, path):
+        """Background thread for force delete operation."""
+        try:
+            # Create batch file with force delete commands
+            batch_content = self.create_force_delete_batch(path)
+            batch_path = os.path.join(os.environ['TEMP'], 'force_delete_temp.bat')
+            
+            with open(batch_path, 'w', encoding='utf-8') as f:
+                f.write(batch_content)
+            
+            # Run the batch file silently
+            import subprocess
+            result = subprocess.run(
+                [batch_path],
+                shell=True,
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            
+            # Show success message
+            self.parent.after(0, self.display_results, {
+                "success": [f"Successfully deleted: {path}"],
+                "failed": [],
+                "skipped": []
+            })
+            
+            # Clear the path input
+            self.parent.after(0, lambda: self.delete_path_var.set(""))
+            
+        except Exception as e:
+            self.parent.after(0, self.display_results, {
+                "success": [],
+                "failed": [f"Error deleting '{path}': {str(e)}"],
+                "skipped": []
+            })
+        finally:
+            # Re-enable buttons
+            self.parent.after(0, self.enable_buttons)
+            # Clean up temporary batch file
+            try:
+                temp_batch_path = os.path.join(os.environ['TEMP'], 'force_delete_temp.bat')
+                if os.path.exists(temp_batch_path):
+                    os.remove(temp_batch_path)
+            except:
+                pass
+    
+    def create_force_delete_batch(self, path):
+        """Create force delete batch file content with robust deletion logic."""
+        # Escape quotes in path
+        escaped_path = path.replace('"', '""')
+        
+        # Aggressive force delete commands that ensure complete deletion
+        commands = [
+            "@echo off",
+            "setlocal enabledelayedexpansion",
+            # Remove attributes from target and all contents
+            f'attrib -r -s -h "{escaped_path}" /s /d',
+            # First try to delete all files inside
+            f'del /f /s /q "{escaped_path}\\*.*" 2>nul',
+            # Then delete all subfolders
+            f'for /d %%x in ("{escaped_path}\\*") do rd /s /q "%%x" 2>nul',
+            # Finally delete the main folder
+            f'rd /s /q "{escaped_path}" 2>nul',
+            # If still exists, try direct delete (for files or stubborn folders)
+            f'if exist "{escaped_path}" del /f /q "{escaped_path}" 2>nul',
+            "endlocal",
+            "exit"
+        ]
+        
+        return "\n".join(commands)
+    
     def clear_inputs(self):
         """Clear all input fields and results."""
         self.port_var.set("")
         self.process_var.set("")
+        self.delete_path_var.set("")
         self.results_text.config(state=tk.NORMAL)
         self.results_text.delete("1.0", tk.END)
         self.results_text.config(state=tk.DISABLED)
@@ -638,6 +780,7 @@ class QuickKillTab:
         self.preview_text.config(state=tk.DISABLED)
         self.kill_one_btn.config(state=tk.DISABLED)
         self.kill_all_btn.config(state=tk.DISABLED)
+        self.delete_btn.config(state=tk.DISABLED)
 
 
 class PortsTab:

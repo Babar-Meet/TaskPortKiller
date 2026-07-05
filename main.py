@@ -16,9 +16,12 @@ import threading
 import time
 import re
 import socket
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 import sys
 import os
+import subprocess
+import shutil
+from pathlib import Path
 
 
 # ==============================
@@ -152,6 +155,256 @@ def ask_confirmation(title: str, message: str) -> bool:
     except Exception as e:
         print(f"Error showing confirmation: {e}")
         return False
+
+
+# ==============================
+# Force Delete Logic (Windows Only)
+# ==============================
+class DeletionError(Exception):
+    """Custom exception for deletion failures."""
+    pass
+
+
+class HandleNotFoundError(Exception):
+    """Exception raised when handle.exe is not found."""
+    pass
+
+
+class MaxRetriesExceededError(Exception):
+    """Exception raised when max retries are exceeded."""
+    pass
+
+
+def get_handle_exe_path() -> Optional[str]:
+    """Get the path to handle.exe or handle64.exe. Checks multiple locations. Returns None if not found."""
+    # Check script's own directory
+    script_dir = Path(__file__).parent
+    handle_paths = [
+        script_dir / "handle.exe",
+        script_dir / "handle64.exe",
+        script_dir / "tools" / "handle.exe",
+        script_dir / "tools" / "handle64.exe"
+    ]
+    
+    for handle_path in handle_paths:
+        if handle_path.exists():
+            print(f"Found handle executable at: {str(handle_path)}")
+            return str(handle_path)
+    
+    # Check system PATH for both versions
+    path_handle = shutil.which("handle.exe")
+    if path_handle:
+        print(f"Found handle.exe in PATH: {path_handle}")
+        return path_handle
+    
+    path_handle64 = shutil.which("handle64.exe")
+    if path_handle64:
+        print(f"Found handle64.exe in PATH: {path_handle64}")
+        return path_handle64
+    
+    print("Warning: handle.exe or handle64.exe not found in any of the checked locations")
+    return None
+
+
+def get_locking_pids(path: str) -> Set[int]:
+    """Get unique PIDs that have handles on the path or its children, or have the path as current working directory."""
+    normalized_path = Path(path).resolve()
+    pids = set()
+    
+    # Get handle-based locking PIDs
+    handle_exe = get_handle_exe_path()
+    if handle_exe:
+        print("  Detecting handle-based locking processes...")
+        try:
+            result = subprocess.run(
+                [handle_exe, str(normalized_path)],
+                shell=False,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+        except subprocess.CalledProcessError as e:
+            # handle.exe returns error code 1 if handles are found
+            if e.returncode == 1 and e.stdout:
+                result = e
+            else:
+                print(f"  Warning: handle.exe failed to check for locks on '{str(normalized_path)}': {e}")
+                result = None
+        except Exception as e:
+            print(f"  Warning: handle.exe failed to check for locks on '{str(normalized_path)}': {e}")
+            result = None
+        
+        if result:
+            # Parse handle.exe output: "process_name.exe pid: 1234 type: File C:\Path\To\File"
+            handle_pattern = re.compile(r'.*?pid: (\d+)', re.IGNORECASE)
+            
+            for line in result.stdout.splitlines():
+                match = handle_pattern.search(line)
+                if match:
+                    try:
+                        pid = int(match.group(1))
+                        pids.add(pid)
+                    except ValueError:
+                        continue
+    
+    # Get processes with current working directory in the target path
+    print("  Detecting CWD-based locking processes...")
+    try:
+        for proc in psutil.process_iter(["pid", "cwd"]):
+            try:
+                proc_cwd = proc.cwd()
+                if proc_cwd:
+                    # Check if proc_cwd is inside the target path
+                    if Path(proc_cwd).resolve().is_relative_to(normalized_path):
+                        pids.add(proc.pid)
+            except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess, OSError):
+                continue
+            except Exception as e:
+                print(f"  Warning: Failed to get CWD for PID {proc.pid}: {e}")
+                continue
+    except Exception as e:
+        print(f"  Warning: Failed to iterate through processes: {e}")
+    
+    print(f"  Found {len(pids)} total locking processes: {pids}")
+    return pids
+
+
+def kill_process_tree(pid: int) -> None:
+    """Kill process tree using taskkill /F /T. Ignores 'already dead' errors."""
+    try:
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F", "/T"],
+            shell=False,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+    except subprocess.CalledProcessError as e:
+        # Ignore "process not found" or "access denied" errors
+        error_msg = e.stderr.lower()
+        if "not found" in error_msg or "access denied" in error_msg:
+            return
+        raise DeletionError(f"Failed to kill process tree (PID {pid}): {e}")
+
+
+def remove_attributes(path: str) -> None:
+    """Remove read-only, system, and hidden attributes from file/folder and contents."""
+    normalized_path = Path(path).resolve()
+    
+    # First try attrib command
+    try:
+        result = subprocess.run(
+            ["cmd", "/c", "attrib", "-r", "-s", "-h", str(normalized_path), "/s", "/d"],
+            shell=False,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        print(f"Successfully removed attributes using attrib command on '{str(normalized_path)}'")
+        return
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: attrib command failed on '{str(normalized_path)}': {e}")
+    except Exception as e:
+        print(f"Warning: attrib command failed on '{str(normalized_path)}': {e}")
+    
+    # Fallback to Python-based attribute removal
+    try:
+        if normalized_path.is_dir():
+            # Recursively process directory contents
+            for item in normalized_path.rglob('*'):
+                try:
+                    # Remove read-only attribute
+                    item.chmod(item.stat().st_mode | 0o777)
+                except Exception as e:
+                    print(f"Warning: Failed to remove attributes from '{str(item)}': {e}")
+            # Also remove attributes from the directory itself
+            normalized_path.chmod(normalized_path.stat().st_mode | 0o777)
+        else:
+            # Remove attributes from file
+            normalized_path.chmod(normalized_path.stat().st_mode | 0o777)
+        print(f"Successfully removed attributes using Python on '{str(normalized_path)}'")
+    except Exception as e:
+        raise DeletionError(f"Failed to remove attributes: {e}")
+
+
+def is_lock_related_error(error_msg: str) -> bool:
+    """Check if an error message is related to file/folder locking."""
+    lock_keywords = [
+        "Access is denied",
+        "The process cannot access the file because it is being used by another process",
+        "Directory not empty",
+        "being used by another process",
+        "access denied",
+        "locked"
+    ]
+    error_msg_lower = error_msg.lower()
+    for keyword in lock_keywords:
+        if keyword.lower() in error_msg_lower:
+            return True
+    return False
+
+
+def release_and_delete(path: str, max_retries: int = 5) -> None:
+    """Main force delete function with robust retry logic and handle.exe fallback."""
+    normalized_path = Path(path).resolve()
+    
+    if not normalized_path.exists():
+        raise FileNotFoundError(f"The path '{str(normalized_path)}' does not exist.")
+    
+    print(f"Attempting to delete: '{str(normalized_path)}'")
+    
+    # Check if handle executable is available
+    handle_exe = get_handle_exe_path()
+    
+    for retry in range(max_retries):
+        print(f"\nRetry {retry + 1} of {max_retries}:")
+        
+        if handle_exe:
+            print("  Detecting locking processes...")
+            # Get locking PIDs
+            locking_pids = get_locking_pids(str(normalized_path))
+            
+            if locking_pids:
+                print(f"  Found {len(locking_pids)} locking processes - killing them")
+                # Kill process trees
+                for pid in locking_pids:
+                    kill_process_tree(pid)
+                
+                # Wait for handles to release (increased from 0.5 to 1 second)
+                print("  Waiting for handles to release...")
+                time.sleep(1.0)
+        
+        # Remove attributes before each deletion attempt
+        print("  Removing attributes...")
+        remove_attributes(str(normalized_path))
+        
+        # Attempt deletion
+        print("  Attempting deletion...")
+        try:
+            if normalized_path.is_dir():
+                shutil.rmtree(str(normalized_path), onerror=lambda func, path, exc_info: os.chmod(path, 0o777) and func(path))
+            else:
+                os.remove(str(normalized_path))
+            print(f"  Successfully deleted: '{str(normalized_path)}'")
+            return  # Success - exit function
+        except Exception as e:
+            error_msg = str(e)
+            print(f"  Deletion failed: {error_msg}")
+            
+            # Check if error is related to locking
+            if is_lock_related_error(error_msg):
+                print("  Error is lock-related - will retry")
+                continue  # Retry the entire process
+            
+            # For non-lock-related errors, raise immediately
+            raise DeletionError(f"Failed to delete path: {error_msg}")
+    
+    # If we reach here, all retries failed
+    raise DeletionError(
+        f"Could not delete '{str(normalized_path)}' after {max_retries} attempts. "
+        "The folder/files may still be in use. Please close any programs using this location and try again, "
+        "or place handle.exe or handle64.exe in the tools folder for automatic process termination."
+    )
 
 
 # ==============================
@@ -696,24 +949,9 @@ class QuickKillTab:
         threading.Thread(target=self.force_delete_thread, args=(path,), daemon=True).start()
     
     def force_delete_thread(self, path):
-        """Background thread for force delete operation."""
+        """Background thread for force delete operation using handle.exe and taskkill."""
         try:
-            # Create batch file with force delete commands
-            batch_content = self.create_force_delete_batch(path)
-            batch_path = os.path.join(os.environ['TEMP'], 'force_delete_temp.bat')
-            
-            with open(batch_path, 'w', encoding='utf-8') as f:
-                f.write(batch_content)
-            
-            # Run the batch file silently
-            import subprocess
-            result = subprocess.run(
-                [batch_path],
-                shell=True,
-                check=True,
-                capture_output=True,
-                text=True
-            )
+            release_and_delete(path)
             
             # Show success message
             self.parent.after(0, self.display_results, {
@@ -725,6 +963,24 @@ class QuickKillTab:
             # Clear the path input
             self.parent.after(0, lambda: self.delete_path_var.set(""))
             
+        except MaxRetriesExceededError as e:
+            self.parent.after(0, self.display_results, {
+                "success": [],
+                "failed": [f"Error: {str(e)}"],
+                "skipped": []
+            })
+        except FileNotFoundError as e:
+            self.parent.after(0, self.display_results, {
+                "success": [],
+                "failed": [f"Error: {str(e)}"],
+                "skipped": []
+            })
+        except DeletionError as e:
+            self.parent.after(0, self.display_results, {
+                "success": [],
+                "failed": [f"Error deleting '{path}': {str(e)}"],
+                "skipped": []
+            })
         except Exception as e:
             self.parent.after(0, self.display_results, {
                 "success": [],
@@ -734,38 +990,6 @@ class QuickKillTab:
         finally:
             # Re-enable buttons
             self.parent.after(0, self.enable_buttons)
-            # Clean up temporary batch file
-            try:
-                temp_batch_path = os.path.join(os.environ['TEMP'], 'force_delete_temp.bat')
-                if os.path.exists(temp_batch_path):
-                    os.remove(temp_batch_path)
-            except:
-                pass
-    
-    def create_force_delete_batch(self, path):
-        """Create force delete batch file content with robust deletion logic."""
-        # Escape quotes in path
-        escaped_path = path.replace('"', '""')
-        
-        # Aggressive force delete commands that ensure complete deletion
-        commands = [
-            "@echo off",
-            "setlocal enabledelayedexpansion",
-            # Remove attributes from target and all contents
-            f'attrib -r -s -h "{escaped_path}" /s /d',
-            # First try to delete all files inside
-            f'del /f /s /q "{escaped_path}\\*.*" 2>nul',
-            # Then delete all subfolders
-            f'for /d %%x in ("{escaped_path}\\*") do rd /s /q "%%x" 2>nul',
-            # Finally delete the main folder
-            f'rd /s /q "{escaped_path}" 2>nul',
-            # If still exists, try direct delete (for files or stubborn folders)
-            f'if exist "{escaped_path}" del /f /q "{escaped_path}" 2>nul',
-            "endlocal",
-            "exit"
-        ]
-        
-        return "\n".join(commands)
     
     def clear_inputs(self):
         """Clear all input fields and results."""
